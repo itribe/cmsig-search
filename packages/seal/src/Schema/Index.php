@@ -60,6 +60,7 @@ final class Index
         public readonly string $name,
         public readonly array $fields,
         public readonly array $options = [],
+        public readonly string $locale = '',
     ) {
         $attributes = $this->getAttributes($fields);
         $this->searchableFields = $attributes['searchableFields'];

@@ -87,7 +87,7 @@ final class SolrSchemaManager implements SchemaManagerInterface
 
         $this->client->collections($collectionQuery);
 
-        $indexFields = $this->createIndexFields($index->fields);
+        $indexFields = $this->createIndexFields($index->fields, locale: $index->locale);
 
         foreach ($indexFields as $indexField) {
             $query = $this->client->createApi([
@@ -122,7 +122,7 @@ final class SolrSchemaManager implements SchemaManagerInterface
      *     multiValued: bool,
      * }>
      */
-    private function createIndexFields(array $fields, string $prefix = '', bool $isParentMultiple = false): array
+    private function createIndexFields(array $fields, string $prefix = '', bool $isParentMultiple = false, string $locale = ''): array
     {
         /**
          * @var array<string, array{
@@ -145,7 +145,9 @@ final class SolrSchemaManager implements SchemaManagerInterface
                 $field instanceof Field\IdentifierField => null, // TODO define primary field
                 $field instanceof Field\TextField => $indexFields[$name] = [
                     'name' => $name,
-                    'type' => $field->searchable ? 'text_general' : 'string',
+                    'type' => $field->searchable
+                        ? (!empty($locale) ? ('text_' . $locale) : 'text_general')
+                        : 'string',
                     'indexed' => $field->searchable,
                     'docValues' => $field->filterable || $field->sortable || $field->facet,
                     'stored' => true,
@@ -197,7 +199,7 @@ final class SolrSchemaManager implements SchemaManagerInterface
                     'useDocValuesAsStored' => false,
                     'multiValued' => $isMultiple,
                 ],
-                $field instanceof Field\ObjectField => $indexFields = \array_replace($indexFields, $this->createIndexFields($field->fields, $name . '.', $isMultiple)),
+                $field instanceof Field\ObjectField => $indexFields = \array_replace($indexFields, $this->createIndexFields($field->fields, $name . '.', $isMultiple, $locale)),
                 $field instanceof Field\JsonObjectField => $indexFields[$name] = [
                     'name' => $name,
                     'type' => 'string',
@@ -208,7 +210,7 @@ final class SolrSchemaManager implements SchemaManagerInterface
                     'multiValued' => $isMultiple,
                 ],
                 $field instanceof Field\TypedField => \array_map(function ($fields, $type) use ($name, &$indexFields, $isMultiple) {
-                    $indexFields = \array_replace($indexFields, $this->createIndexFields($fields, $name . '.' . $type . '.', $isMultiple));
+                    $indexFields = \array_replace($indexFields, $this->createIndexFields($fields, $name . '.' . $type . '.', $isMultiple, $locale));
 
                     if ($isMultiple) {
                         $indexFields[$name . '.' . $type . '._originalIndex'] = [
