@@ -32,7 +32,6 @@ final class RediSearchSearcher implements SearcherInterface
     ) {
         $this->marshaller = new Marshaller(
             dateFormat: 'U',
-            addRawFilterTextField: true,
             geoPointFieldConfig: [
                 'latitude' => 1,
                 'longitude' => 0,
@@ -88,7 +87,7 @@ final class RediSearchSearcher implements SearcherInterface
         $arguments = [
             'GROUPBY', 1, $distinctField,
             'REDUCE', 'FIRST_VALUE', '1', $identifierField, 'AS', 'documentId',
-            'DIALECT', '3',
+            'DIALECT', '2',
         ];
 
         /** @var array<mixed>|false $result */
@@ -269,7 +268,19 @@ final class RediSearchSearcher implements SearcherInterface
             };
 
             match (true) {
-                $filter instanceof Condition\SearchCondition => $filters[] = '%%' . \implode('%% ', \explode(' ', $this->escapeFilterValue($filter->query))) . '%%', // levenshtein of 2 per word
+                $filter instanceof Condition\SearchCondition => $filters[] = \implode(' ', \array_map(
+                    function (string $term) {
+                        $escapedTerm = $this->escapeFilterValue($term);
+
+                        // levenshtein algorithm per word length
+                        return match (\strlen($term)) {
+                            0, 1 => $escapedTerm,
+                            2 => '%' . $escapedTerm . '%',
+                            default => '%%' . $escapedTerm . '%%',
+                        };
+                    },
+                    \array_filter(\explode(' ', $filter->query), \trim(...)), // @phpstan-ignore-line argument.type
+                )),
                 $filter instanceof Condition\IdentifierCondition => $filters[] = '@' . $index->getIdentifierField()->name . ':{' . $this->escapeFilterValue($filter->identifier) . '}',
                 $filter instanceof Condition\EqualCondition => $filters[] = '@' . $this->getFilterField($index, $filter->field) . ':{' . $this->escapeFilterValue($this->convertValue($index, $filter->field, $filter->value)) . '}',
                 $filter instanceof Condition\NotEqualCondition => $filters[] = '-@' . $this->getFilterField($index, $filter->field) . ':{' . $this->escapeFilterValue($this->convertValue($index, $filter->field, $filter->value)) . '}',
@@ -386,6 +397,7 @@ final class RediSearchSearcher implements SearcherInterface
                 $arguments = \array_merge($arguments, [
                     'GROUPBY', '1', '@' . $this->getFilterField($search->index, $facet->field),
                     'REDUCE', 'COUNT', '0', 'AS', 'count',
+                    'LIMIT', '0', (string) CountFacet::DEFAULT_MAX_VALUES,
                 ]);
 
                 $arguments[] = 'DIALECT';

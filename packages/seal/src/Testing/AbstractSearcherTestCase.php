@@ -19,6 +19,7 @@ use CmsIg\Seal\Adapter\SchemaManagerInterface;
 use CmsIg\Seal\Adapter\SearcherInterface;
 use CmsIg\Seal\Schema\Schema;
 use CmsIg\Seal\Search\Condition\Condition;
+use CmsIg\Seal\Search\Facet\CountFacet;
 use CmsIg\Seal\Search\Facet\Facet;
 use CmsIg\Seal\Search\SearchBuilder;
 use PHPUnit\Framework\TestCase;
@@ -299,6 +300,48 @@ abstract class AbstractSearcherTestCase extends TestCase
         }
     }
 
+    public function testCountFacetIsTrimmedToDefaultMaxValues(): void
+    {
+        $schema = self::getSchema();
+        $index = $schema->indexes[TestingHelper::INDEX_COMPLEX];
+        $documents = [];
+
+        for ($i = 1; $i <= CountFacet::DEFAULT_MAX_VALUES + 11; ++$i) {
+            $documents[] = [
+                'uuid' => 'facet-trim-' . $i,
+                'rating' => (float) $i,
+            ];
+        }
+
+        foreach ($documents as $document) {
+            self::$taskHelper->tasks[] = self::$indexer->save(
+                $index,
+                $document,
+                ['return_slow_promise_result' => true],
+            );
+        }
+        self::$taskHelper->waitForAll();
+
+        $search = new SearchBuilder($schema, self::$searcher);
+        $search->index(TestingHelper::INDEX_COMPLEX);
+        $search->addFacet(Facet::count(field: 'rating'));
+
+        /** @var array{rating: array{count: array<string, int>}} $facets */
+        $facets = $search->getResult()->facets();
+        $ratingFacetCount = $facets['rating']['count'];
+
+        $this->assertCount(CountFacet::DEFAULT_MAX_VALUES, $ratingFacetCount);
+
+        foreach ($documents as $document) {
+            self::$taskHelper->tasks[] = self::$indexer->delete(
+                $index,
+                $document['uuid'],
+                ['return_slow_promise_result' => true],
+            );
+        }
+        self::$taskHelper->waitForAll();
+    }
+
     public function testCount(): void
     {
         $schema = self::getSchema();
@@ -369,6 +412,14 @@ abstract class AbstractSearcherTestCase extends TestCase
         $search->addFilter(Condition::search('Thing'));
 
         $this->assertSame([$documents[2]], [...$search->getResult()]);
+
+        $search = new SearchBuilder($schema, self::$searcher);
+        $search->index(TestingHelper::INDEX_COMPLEX);
+        $search->addFilter(Condition::search('Other Thing ')); // test multi word and space behind
+
+        // some search engines will find more and some less so we just search for common match
+        $this->assertContains($documents[2], [...$search->getResult()]);
+        $this->assertLessThanOrEqual(2, \count([...$search->getResult()]));
 
         $search = new SearchBuilder($schema, self::$searcher);
         $search->index(TestingHelper::INDEX_COMPLEX);
@@ -444,6 +495,49 @@ abstract class AbstractSearcherTestCase extends TestCase
         $search->addFilter(Condition::search('Thing'));
 
         $this->assertSame([$documents[2]], [...$search->getResult()]);
+
+        foreach ($documents as $document) {
+            self::$taskHelper->tasks[] = self::$indexer->delete(
+                $schema->indexes[TestingHelper::INDEX_COMPLEX],
+                $document['uuid'],
+                ['return_slow_promise_result' => true],
+            );
+        }
+    }
+
+    public function testFilterSearchWithHighlightWithoutQuery(): void
+    {
+        $documents = TestingHelper::createComplexFixtures();
+
+        $schema = self::getSchema();
+
+        foreach ($documents as $document) {
+            self::$taskHelper->tasks[] = self::$indexer->save(
+                $schema->indexes[TestingHelper::INDEX_COMPLEX],
+                $document,
+                ['return_slow_promise_result' => true],
+            );
+        }
+        self::$taskHelper->waitForAll();
+
+        $search = new SearchBuilder($schema, self::$searcher);
+        $search->index(TestingHelper::INDEX_COMPLEX);
+        $search->addFilter(Condition::equal('locale', 'en_GB'));
+        $search->addSortBy('title', 'asc');
+        $search->highlight(['title', 'article'], '<mark>', '</mark>');
+
+        $expectedDocumentA = $documents[0];
+        $expectedDocumentA['_formatted'] = [
+            'title' => null,
+            'article' => null,
+        ];
+        $expectedDocumentB = $documents[2];
+        $expectedDocumentB['_formatted'] = [
+            'title' => null,
+            'article' => null,
+        ];
+
+        $this->assertSame([$expectedDocumentA, $expectedDocumentB], [...$search->getResult()]);
 
         foreach ($documents as $document) {
             self::$taskHelper->tasks[] = self::$indexer->delete(
@@ -554,6 +648,52 @@ abstract class AbstractSearcherTestCase extends TestCase
         ];
         $expectedDocumentsVariantB = [
             $documents[1],
+            $documents[0],
+        ];
+
+        $loadedDocuments = [...$search->getResult()];
+        $this->assertCount(2, $loadedDocuments);
+
+        $this->assertTrue(
+            $expectedDocumentsVariantA === $loadedDocuments
+            || $expectedDocumentsVariantB === $loadedDocuments,
+            'Not correct documents where found.',
+        );
+
+        foreach ($documents as $document) {
+            self::$taskHelper->tasks[] = self::$indexer->delete(
+                $schema->indexes[TestingHelper::INDEX_COMPLEX],
+                $document['uuid'],
+                ['return_slow_promise_result' => true],
+            );
+        }
+    }
+
+    public function testEqualConditionNotSearchable(): void
+    {
+        $documents = TestingHelper::createComplexFixtures();
+
+        $schema = self::getSchema();
+
+        foreach ($documents as $document) {
+            self::$taskHelper->tasks[] = self::$indexer->save(
+                $schema->indexes[TestingHelper::INDEX_COMPLEX],
+                $document,
+                ['return_slow_promise_result' => true],
+            );
+        }
+        self::$taskHelper->waitForAll();
+
+        $search = new SearchBuilder($schema, self::$searcher);
+        $search->index(TestingHelper::INDEX_COMPLEX);
+        $search->addFilter(Condition::equal('locale', 'en_GB'));
+
+        $expectedDocumentsVariantA = [
+            $documents[0],
+            $documents[2],
+        ];
+        $expectedDocumentsVariantB = [
+            $documents[2],
             $documents[0],
         ];
 
